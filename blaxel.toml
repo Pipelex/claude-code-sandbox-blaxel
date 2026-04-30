@@ -1,0 +1,15 @@
+name = "claude-sandbox"
+type = "sandbox"
+description = "Generic Claude Agent SDK sandbox with SSE streaming server"
+
+[runtime]
+generation = "mk3"
+memory = 4096
+
+[[runtime.ports]]
+name = "agent-server"
+target = 4100
+protocol = "HTTP"
+
+# Image-wide vars (ANTHROPIC_API_KEY, ANTHROPIC_MODEL) come from `bl deploy -e .env`.
+# Per-instance vars can be injected at instance creation time via the Blaxel API.
