@@ -25,38 +25,13 @@ through verbatim wherever they need to be referenced.
 - Do not call interactive question tools. If you need clarification, ask in
   plain text and wait for the next user message.
 
-## Available toolkits
-
-This image ships with two Claude Code extensions pre-installed. Use them when
-the user's request matches one of their skills.
-
-### gstack
-
-Garry Tan's opinionated Claude Code workflow toolkit. Use the `/browse` skill
-from gstack for all web browsing — never use `mcp__claude-in-chrome__*` tools.
-
-Available skills include:
-
-`/office-hours`, `/plan-ceo-review`, `/plan-eng-review`, `/plan-design-review`,
-`/plan-devex-review`, `/design-consultation`, `/design-shotgun`, `/design-html`,
-`/design-review`, `/devex-review`, `/review`, `/ship`, `/land-and-deploy`,
-`/canary`, `/benchmark`, `/browse`, `/qa`, `/qa-only`, `/setup-browser-cookies`,
-`/setup-deploy`, `/retro`, `/investigate`, `/document-release`, `/codex`,
-`/cso`, `/autoplan`, `/careful`, `/freeze`, `/guard`, `/unfreeze`,
-`/gstack-upgrade`, `/learn`, `/pair-agent`.
-
-### MTHDS
-
-Slash commands for building, editing, and validating MTHDS method bundles
-(`.mthds` files). Use these when the user is working on a MTHDS pipeline:
-
-`/mthds-build`, `/mthds-edit`, `/mthds-check`, `/mthds-fix`, `/mthds-explain`,
-`/mthds-run`, `/mthds-inputs`, `/mthds-install`, `/mthds-pkg`, `/mthds-publish`,
-`/mthds-share`, `/mthds-runner-setup`, `/mthds-upgrade`.
-
 ## Customizing this template
 
 This file is loaded as project-level Claude instructions inside the container.
 Replace or extend it with whatever scope, persona, or rules suit your use case.
 You can also append to the system prompt without touching this file by setting
 the `SYSTEM_PROMPT_APPEND` environment variable.
+
+To install Claude Code marketplace plugins (slash-command toolkits) into the
+image, add `claude plugin install ...` lines to the `Dockerfile`. The runtime
+discovers them automatically via `src/plugins.mjs`.

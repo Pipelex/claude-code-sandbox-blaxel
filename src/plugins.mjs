@@ -1,6 +1,10 @@
 /**
  * Plugin discovery for the Claude Agent SDK.
  *
+ * No plugins are installed by default in this template. To add one, append a
+ * `claude plugin install ...` line to the Dockerfile — the discovery here will
+ * pick it up automatically and pass it to the SDK in `query()`'s options.
+ *
  * Plugins are typically installed at image build time as `root` and run at
  * runtime as `agent`. The `installed_plugins.json` file records install paths
  * using the build-time user, so we remap `/root/...` -> `/home/agent/...` when

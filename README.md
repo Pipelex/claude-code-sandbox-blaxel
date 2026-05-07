@@ -1,45 +1,17 @@
-# Claude Code Sandbox Template (for Blaxel)
+# Claude Code Sandbox (for Blaxel)
 
-A minimal, opinionated template for running the **Claude Agent SDK** inside a
+A minimal sandbox image for running the **Claude Agent SDK** inside a
 **Blaxel sandbox** and exposing it as an HTTP/SSE service. Drop it behind any
-chat UI, point it at a workspace, and you have an editor-aware Claude agent
-that streams its work back to the browser — running in a real isolated VM
-with full filesystem and process access via Blaxel's `sandbox-api`.
+chat UI or agent, point it at a workspace, and you have an editor-aware
+Claude agent that streams its work back to the caller — running in a real
+isolated VM with full filesystem and process access via Blaxel's
+`sandbox-api`.
 
-The image ships with two Claude Code toolkits pre-installed and ready to use:
+The image is deliberately generic. It ships with no slash-command plugins.
+You bring your own — see `Customizing` below.
 
-- **[gstack](https://github.com/garrytan/gstack)** — Garry Tan's opinionated
-  Claude Code workflow toolkit. 23+ slash commands covering planning,
-  review, QA, security, and shipping (`/office-hours`, `/plan-ceo-review`,
-  `/review`, `/qa`, `/ship`, `/cso`, ...). MIT licensed.
-- **[MTHDS](https://mthds.ai)** — Slash commands for building, editing, and
-  validating MTHDS method bundles (`/mthds-build`, `/mthds-edit`,
-  `/mthds-check`, `/mthds-fix`, ...).
-
-The server, system prompt, and request contracts are otherwise fully generic —
-swap or extend the toolkits and use it for any Claude Code use case.
-
-## TL;DR
-
-```sh
-cp .env.example .env && echo "ANTHROPIC_API_KEY=sk-..." >> .env
-make build && make run
-```
-
-```sh
-curl -N -X POST http://localhost:4100/chat \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "sessionId": "demo",
-    "content": "Create hello.txt with the word hi inside.",
-    "files": []
-  }'
-```
-
-You'll get a Server-Sent Events stream containing every assistant message,
-tool call, tool result, plus a workspace snapshot at end-of-turn.
-
-To wire it into your own UI, jump to **[Consuming the stream from a UI](#consuming-the-stream-from-a-ui)**.
+For an end-to-end example of a chatbot that uses this sandbox, see the
+companion repo `template-chatbot-claudecode`.
 
 ## Architecture
 
@@ -61,7 +33,7 @@ Blaxel-internal use.
 
 - Caller sends the current set of files with every `/chat` request.
 - The server **wipes and rewrites** `WORKSPACE_DIR` so the agent's view always
-  matches the editor exactly — no drift between agent edits and user edits.
+  matches the caller exactly — no drift between agent edits and caller edits.
 - After the agent finishes a turn, the server emits a `files` SSE event with
   a snapshot of the workspace so the caller can re-hydrate authoritatively.
 - Supports nested directories. Path-traversal attempts (`..`, absolute paths)
@@ -95,12 +67,11 @@ Blaxel-internal use.
 
 ### Plugin discovery
 
-- Plugins installed at image build time are discovered at runtime by reading
-  `installed_plugins.json` and remapping `/root/...` paths to `/home/agent/...`
-  (so build-as-root + run-as-agent works out of the box).
+- Any plugins installed at image build time are discovered at runtime by
+  reading `installed_plugins.json` and remapping `/root/...` paths to
+  `/home/agent/...` (so build-as-root + run-as-agent works out of the box).
 - Falls back to scanning the plugin cache directory if the manifest is absent.
-- Add plugins by editing the `claude plugin install ...` lines in the
-  `Dockerfile`.
+- No plugins are installed in this template — see `Customizing`.
 
 ### Bounded resource use
 
@@ -158,244 +129,9 @@ opening another stream.
 
 Returns `{ status, sessions, plugins }`.
 
-## Consuming the stream from a UI
+## How to run
 
-The `/chat` response is a **Server-Sent Events** stream. Two layers:
-
-1. **Server SSE event types** (the `event:` line) — set by this server.
-2. **SDK message types** (the `type:` field inside `event: message`'s JSON) —
-   passed through verbatim from the Claude Agent SDK.
-
-### What to render, what to ignore
-
-For a typical chat UI with a code editor pane, you only need to act on a small
-subset:
-
-| Where it comes from               | What it is                                  | What your UI does                                           |
-|-----------------------------------|---------------------------------------------|-------------------------------------------------------------|
-| `event: session`                  | sessionId echo                              | Store it; reuse on follow-ups.                              |
-| `event: message` `type: system`   | Init metadata (model, tools, plugins)       | Optional "connected" indicator; otherwise ignore.           |
-| `event: message` `type: stream_event` `delta: text_delta` | Live token of assistant text | **Append to current chat bubble** for live streaming.       |
-| `event: message` `type: stream_event` `delta: input_json_delta` | Live token of tool-call args | Ignore (or show a "preparing tool…" spinner).               |
-| `event: message` `type: assistant` (text block)      | Final assistant text          | If you stream via `text_delta`, ignore. Otherwise render.   |
-| `event: message` `type: assistant` (tool_use block)  | Claude is calling a tool      | Render a tool-call widget (e.g. "Reading main.py").         |
-| `event: message` `type: user` (tool_result)          | Tool output coming back       | Render inline / collapsed under the tool widget.            |
-| `event: files`                    | End-of-turn workspace snapshot              | **Replace editor state** with `files`.                      |
-| `event: message` `type: result`   | Turn finished, with cost/usage              | Mark chat as done; optionally show cost.                    |
-| `event: done`                     | SDK iterator closed (rare)                  | Close the connection.                                       |
-| `event: error`                    | Server error                                | Show error toast.                                           |
-| `: keepalive`                     | Comment line every 15s                      | Ignore (the parser below skips it).                         |
-
-Two simplifying choices most apps make:
-
-- Pick **one** of `text_delta` (live tokens) or consolidated `assistant`
-  (final block) — not both, or you double-render.
-- Skip `input_json_delta` entirely. It's high-volume and watching JSON arrive
-  byte-by-byte is not a feature.
-
-### Drop-in TypeScript client
-
-```ts
-// sandbox-client.ts — copy-paste, no dependencies.
-
-export type ChatRequest = {
-  sessionId: string;
-  content: string | unknown[];
-  files?: { path: string; content: string }[];
-  attachments?: { name: string; uri: string }[];
-};
-
-export type WorkspaceFile = { path: string; content: string };
-
-export type Handlers = {
-  /** Live token from the assistant. Append to the current chat bubble. */
-  onText?: (chunk: string) => void;
-  /** Claude is calling a tool. Show a widget. */
-  onToolUse?: (tool: { id: string; name: string; input: unknown }) => void;
-  /** Tool finished. Show its output. */
-  onToolResult?: (result: { toolUseId: string; content: unknown }) => void;
-  /** End-of-turn workspace snapshot. Replace your editor state. */
-  onFiles?: (files: WorkspaceFile[]) => void;
-  /** Turn finished. Optionally show cost/duration. */
-  onResult?: (result: {
-    text: string;
-    durationMs: number;
-    costUsd: number;
-    numTurns: number;
-  }) => void;
-  onError?: (message: string) => void;
-};
-
-export async function chat(
-  baseUrl: string,
-  body: ChatRequest,
-  handlers: Handlers,
-  signal?: AbortSignal,
-): Promise<void> {
-  const res = await fetch(`${baseUrl}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal,
-  });
-  if (!res.ok || !res.body) {
-    throw new Error(`chat failed: ${res.status} ${res.statusText}`);
-  }
-
-  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
-  let buf = "";
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) return;
-    buf += value;
-
-    // SSE frames are separated by a blank line.
-    let idx;
-    while ((idx = buf.indexOf("\n\n")) !== -1) {
-      const frame = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
-      handleFrame(frame, handlers);
-    }
-  }
-}
-
-function handleFrame(frame: string, h: Handlers) {
-  let event = "message";
-  let data = "";
-  for (const line of frame.split("\n")) {
-    if (line.startsWith(":")) continue;             // keepalive comment
-    if (line.startsWith("event: ")) event = line.slice(7).trim();
-    else if (line.startsWith("data: ")) data += line.slice(6);
-  }
-  if (!data) return;
-
-  let payload: any;
-  try { payload = JSON.parse(data); } catch { return; }
-
-  switch (event) {
-    case "session": return;
-    case "files":   h.onFiles?.(payload.files); return;
-    case "done":    return;
-    case "error":   h.onError?.(payload.error); return;
-    case "message": handleSDKMessage(payload, h); return;
-  }
-}
-
-function handleSDKMessage(msg: any, h: Handlers) {
-  switch (msg.type) {
-    case "stream_event": {
-      const ev = msg.event;
-      if (ev?.type === "content_block_delta" && ev.delta?.type === "text_delta") {
-        h.onText?.(ev.delta.text);
-      }
-      return;
-    }
-    case "assistant": {
-      // Use this branch if you DON'T stream via text_delta.
-      for (const block of msg.message?.content ?? []) {
-        if (block.type === "tool_use") {
-          h.onToolUse?.({ id: block.id, name: block.name, input: block.input });
-        }
-      }
-      return;
-    }
-    case "user": {
-      for (const block of msg.message?.content ?? []) {
-        if (block.type === "tool_result") {
-          h.onToolResult?.({
-            toolUseId: block.tool_use_id,
-            content: block.content,
-          });
-        }
-      }
-      return;
-    }
-    case "result": {
-      h.onResult?.({
-        text: msg.result,
-        durationMs: msg.duration_ms,
-        costUsd: msg.total_cost_usd,
-        numTurns: msg.num_turns,
-      });
-      return;
-    }
-  }
-}
-```
-
-### Minimal usage
-
-```ts
-import { chat } from "./sandbox-client";
-
-await chat(
-  "http://localhost:4100",
-  {
-    sessionId: "demo",
-    content: "Add a docstring to main.py",
-    files: editor.getAllFiles(),          // [{ path, content }, ...]
-  },
-  {
-    onText:       (chunk)  => chatBubble.append(chunk),
-    onToolUse:    (tool)   => chatBubble.showToolWidget(tool),
-    onToolResult: (result) => chatBubble.showToolResult(result),
-    onFiles:      (files)  => editor.replaceAll(files),
-    onResult:     (r)      => chatBubble.markDone(r),
-    onError:      (msg)    => toast.error(msg),
-  },
-);
-```
-
-### Sending follow-ups in the same session
-
-Two patterns, both valid:
-
-- **New `/chat` request** with the same `sessionId` — server resumes the SDK
-  session, keeps history. Easiest pattern.
-- **`POST /respond`** while a `/chat` SSE stream is still open — pushes a
-  message into the live session. The reply streams back on the existing
-  connection. Use this if you want to keep one long-lived SSE per session.
-
-### Common pitfalls
-
-- **Don't use `EventSource`.** It only does GET. The body for `/chat` is JSON
-  in a POST, so use `fetch` + `ReadableStream` (the parser above).
-- **Pass `signal` to `fetch`** if you want to cancel a stream when the user
-  navigates away. Without it, the server keeps streaming until the SDK
-  finishes.
-- **`event: done` is rare.** It only fires when the SDK's iterator truly
-  closes (idle session reaped, server shutting down). For "turn finished"
-  use `result`, not `done`.
-- **The workspace snapshot is the source of truth at end-of-turn.** Don't
-  try to track agent edits from `tool_result` events — just diff the
-  snapshot against your last-known state. The server already coalesced
-  everything for you.
-
-## Configuration
-
-| Env var                   | Default                                              | Purpose                                          |
-|---------------------------|------------------------------------------------------|--------------------------------------------------|
-| `ANTHROPIC_API_KEY`       | —                                                    | Required. SDK auth.                              |
-| `ANTHROPIC_MODEL`         | `claude-sonnet-4-6`                                  | Model id used by the agent.                      |
-| `AGENT_PORT`              | `4100`                                               | HTTP port (matches `blaxel.toml`).               |
-| `WORKSPACE_DIR`           | `/workspace`                                         | Mirrored workspace root.                         |
-| `MAX_BODY_BYTES`          | `10485760` (10 MiB)                                  | Request body cap.                                |
-| `SESSION_IDLE_MS`         | `1800000` (30 min)                                   | Idle session reap threshold.                     |
-| `MAX_TURNS`               | `100`                                                | SDK turn cap per query.                          |
-| `SNAPSHOT_MAX_FILES`      | `200`                                                | Files included in end-of-turn snapshot.          |
-| `SNAPSHOT_MAX_FILE_BYTES` | `1048576` (1 MiB)                                    | Per-file size limit for snapshots.               |
-| `SYSTEM_PROMPT_APPEND`    | empty                                                | Extra text appended to the system prompt.        |
-| `PLUGINS_INSTALLED_PATH`  | `/home/agent/.claude/plugins/installed_plugins.json` | Manifest used for plugin discovery.              |
-| `PLUGINS_CACHE_DIR`       | `/home/agent/.claude/plugins/cache`                  | Fallback plugin scan directory.                  |
-
-`ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` are baked at build time via
-`bl deploy -e .env`. Per-instance vars can be injected at sandbox creation
-time via the Blaxel API.
-
-## Quick start
-
-### Local
+### Locally with Docker
 
 ```sh
 cp .env.example .env
@@ -405,14 +141,21 @@ make build
 make run
 ```
 
-Then:
+These run, in order:
+
+```sh
+docker build --platform linux/amd64 -t claude-sandbox .
+docker run --rm -p 4100:4100 --env-file .env claude-sandbox
+```
+
+Then in another terminal:
 
 ```sh
 curl -N -X POST http://localhost:4100/chat \
   -H 'Content-Type: application/json' \
   -d '{
     "sessionId": "demo",
-    "content": "Create a hello.txt with the word hi inside.",
+    "content": "Create hello.txt with the word hi inside.",
     "files": []
   }'
 ```
@@ -426,18 +169,44 @@ then `done`.
 make deploy
 ```
 
-This runs `bl deploy -e .env`, which builds the image, pushes it to your
-Blaxel workspace, and updates the `claude-sandbox` sandbox definition.
-Existing running instances are unaffected until they restart; new instances
-use the updated image.
+Which runs:
 
-To spin up a throwaway test instance from the deployed image, see the
-example `bl apply` invocation pattern in your Blaxel docs.
+```sh
+bl deploy -e .env
+```
+
+This builds the image on Blaxel's build host, pushes it to your Blaxel
+workspace, and registers the `claude-sandbox` sandbox image. From there,
+any Blaxel agent in the same workspace can spawn instances of it via
+`SandboxInstance.create({ image: "claude-sandbox", ... })`.
+
+For an end-to-end agent that drives this sandbox, see
+`template-chatbot-claudecode`.
+
+## Configuration
+
+| Env var                   | Default                                              | Purpose                                          |
+|---------------------------|------------------------------------------------------|--------------------------------------------------|
+| `ANTHROPIC_API_KEY`       | —                                                    | Required. SDK auth.                              |
+| `ANTHROPIC_MODEL`         | `claude-sonnet-4-6`                                  | Model id used by the agent.                      |
+| `AGENT_PORT`              | `4100`                                               | HTTP port (matches `blaxel.toml`).               |
+| `WORKSPACE_DIR`           | `/workspace`                                         | Mirrored workspace root.                         |
+| `MAX_BODY_BYTES`          | `10485760` (10 MiB)                                  | Request body cap.                                |
+| `SESSION_IDLE_MS`         | `1800000` (30 min)                                   | Idle session reap threshold.                     |
+| `MAX_TURNS`               | `100`                                                | SDK turn cap per query.                          |
+| `SNAPSHOT_MAX_FILES`      | `200`                                                | Files included in end-of-turn snapshot.          |
+| `SNAPSHOT_MAX_FILE_BYTES` | `1048576`                                            | Per-file size limit for snapshots.               |
+| `SYSTEM_PROMPT_APPEND`    | empty                                                | Extra text appended to the system prompt.        |
+| `PLUGINS_INSTALLED_PATH`  | `/home/agent/.claude/plugins/installed_plugins.json` | Manifest used for plugin discovery.              |
+| `PLUGINS_CACHE_DIR`       | `/home/agent/.claude/plugins/cache`                  | Fallback plugin scan directory.                  |
+
+`ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` are baked at build time via
+`bl deploy -e .env`. Per-instance vars can be injected at sandbox creation
+time via the Blaxel API.
 
 ## Customizing
 
-This is what makes the template *generic* — the Claude Code wrapper is
-deliberately use-case-agnostic. Adapt it to your domain by changing:
+The sandbox is meant to be forked. Common knobs:
 
 - **Persona / scope rules** — edit `CLAUDE.md`. Copied into
   `/home/agent/.claude/CLAUDE.md` at build time and loaded by the SDK as
@@ -445,18 +214,17 @@ deliberately use-case-agnostic. Adapt it to your domain by changing:
 - **Extra system prompt** — set `SYSTEM_PROMPT_APPEND` at runtime; appended
   to the Claude Code preset without rebuilding the image. Useful for
   per-instance personas injected by the Blaxel API.
-- **Toolkits** — edit the relevant lines in `Dockerfile`:
-  - `claude plugin install ...` for Claude Code marketplace plugins (MTHDS
-    is included).
-  - The `git clone .../gstack && ./setup -q` block for skill-based toolkits
-    (gstack is included).
-  - Remove either, replace with your own, or add more.
+- **Slash-command plugins** — add `claude plugin install ...` lines to the
+  `Dockerfile`. `src/plugins.mjs` discovers them at runtime and registers
+  them with the SDK automatically. Examples:
+  - [MTHDS](https://mthds.ai) — `/mthds-build`, `/mthds-edit`, ...
+  - [gstack](https://github.com/garrytan/gstack) — `/qa`, `/ship`, `/review`, ...
 
 ## Project layout
 
 ```
 .
-├── Dockerfile          # Node 22 + sandbox-api + Claude Code + plugins (gstack, MTHDS)
+├── Dockerfile          # Node 22 + sandbox-api + Claude Code, no plugins
 ├── LICENSE             # MIT
 ├── Makefile            # build / run / deploy
 ├── README.md
@@ -478,3 +246,41 @@ deliberately use-case-agnostic. Adapt it to your domain by changing:
 ├── .env.example
 └── .gitignore
 ```
+
+## SSE event reference
+
+A consumer reading the `/chat` stream needs to handle two layers:
+
+1. **Server SSE event types** (the `event:` line) — set by this server.
+2. **SDK message types** (the `type:` field inside `event: message`'s JSON) —
+   passed through verbatim from the Claude Agent SDK.
+
+For a typical chat UI:
+
+| Where it comes from               | What it is                                  | What your UI does                                           |
+|-----------------------------------|---------------------------------------------|-------------------------------------------------------------|
+| `event: session`                  | sessionId echo                              | Store it; reuse on follow-ups.                              |
+| `event: message` `type: system`   | Init metadata (model, tools, plugins)       | Optional "connected" indicator; otherwise ignore.           |
+| `event: message` `type: stream_event` `delta: text_delta` | Live token of assistant text | **Append to current chat bubble** for live streaming.       |
+| `event: message` `type: assistant` (text block)      | Final assistant text          | If you stream via `text_delta`, ignore. Otherwise render.   |
+| `event: message` `type: assistant` (tool_use block)  | Claude is calling a tool      | Render a tool-call widget.                                  |
+| `event: message` `type: user` (tool_result)          | Tool output coming back       | Render inline / collapsed under the tool widget.            |
+| `event: files`                    | End-of-turn workspace snapshot              | **Replace editor state** with `files`.                      |
+| `event: message` `type: result`   | Turn finished, with cost/usage              | Mark chat as done; optionally show cost.                    |
+| `event: done`                     | SDK iterator closed (rare)                  | Close the connection.                                       |
+| `event: error`                    | Server error                                | Show error toast.                                           |
+| `: keepalive`                     | Comment line every 15s                      | Ignore.                                                     |
+
+For a working SSE parser and a Fastify agent that proxies this stream, see
+`template-chatbot-claudecode`.
+
+## Authentication
+
+This server has no auth of its own — Blaxel gates inbound traffic at the
+platform layer (private previews, workspace tokens). Do not run this image
+outside a Blaxel sandbox without putting an authenticating proxy in front of
+it.
+
+## License
+
+MIT — see `LICENSE`.

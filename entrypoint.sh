@@ -3,7 +3,7 @@ set -e
 
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-# ── Blaxel sandbox API (must run as root, port 8080) ──────────────────────
+# Blaxel sandbox API — must run as root, port 8080.
 /usr/local/bin/sandbox-api &
 
 echo "Waiting for sandbox-api..."
@@ -23,24 +23,13 @@ WORKSPACE_DIR="${WORKSPACE_DIR:-/workspace}"
 mkdir -p "$WORKSPACE_DIR" /home/agent/.claude
 chown -R agent:agent "$WORKSPACE_DIR" /home/agent
 
-# ── Diagnostics ────────────────────────────────────────────────────────────
+# Diagnostics: log how many plugin skill files are present.
 if [ -d /home/agent/.claude/plugins ]; then
   SKILL_COUNT=$(find /home/agent/.claude/plugins -name "SKILL.md" 2>/dev/null | wc -l | tr -d ' ')
   echo "Plugin skills found: $SKILL_COUNT"
 fi
 
-# ── MTHDS runner: configure Pipelex API as default runner ─────────────────
-# Synchronous + visible so any setup failure surfaces in container logs and
-# the runner is configured before the agent server accepts requests.
-if [ -n "$PIPELEX_API_KEY" ]; then
-  echo "Configuring MTHDS API runner..."
-  gosu agent mthds-agent runner setup api \
-    --api-key "$PIPELEX_API_KEY" \
-    --api-url "https://app-staging.pipelex.com"
-  gosu agent mthds runner set-default api
-fi
-
-# ── Start the agent server as the non-root user ───────────────────────────
+# Start the agent server as the non-root user.
 echo "Starting Claude sandbox server as user 'agent'..."
 gosu agent /usr/local/bin/node /app/server.mjs &
 
