@@ -108,14 +108,13 @@ async function handleChat(req, res) {
     return sendJSON(res, err.statusCode || 400, { error: err.message });
   }
 
-  const { content, sessionId, files, attachments } = body;
+  const { content, sessionId, files } = body;
 
   const hasContent =
     (typeof content === "string" && content.length > 0) ||
     (Array.isArray(content) && content.length > 0);
-  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
-  if (!hasContent && !hasAttachments) {
-    return sendJSON(res, 400, { error: "content or attachments required" });
+  if (!hasContent) {
+    return sendJSON(res, 400, { error: "content is required" });
   }
 
   let synced;
@@ -150,28 +149,14 @@ async function handleChat(req, res) {
 
   const prefix =
     synced.length > 0 ? `[Workspace synced: ${synced.join(", ")}]\n\n` : "";
-  const suffix = hasAttachments
-    ? "\n\n[Attached references]\n" +
-      attachments
-        .filter((a) => a && a.name && a.uri)
-        .map((a) => `- ${a.name}: ${a.uri}`)
-        .join("\n")
-    : "";
 
   let outboundContent;
   if (typeof content === "string") {
-    outboundContent = prefix + content + suffix;
-  } else if (Array.isArray(content)) {
-    outboundContent = content;
-    if (prefix || suffix) {
-      outboundContent = [
-        ...(prefix ? [{ type: "text", text: prefix }] : []),
-        ...content,
-        ...(suffix ? [{ type: "text", text: suffix }] : []),
-      ];
-    }
+    outboundContent = prefix + content;
+  } else if (prefix) {
+    outboundContent = [{ type: "text", text: prefix }, ...content];
   } else {
-    outboundContent = prefix + (suffix || "");
+    outboundContent = content;
   }
 
   session.sendMessage(outboundContent);

@@ -12,12 +12,6 @@ directory that is kept in sync with their editor.
 - Anything you write to the workspace becomes visible to them after the turn ends.
 - Stay inside the workspace. Do not write outside it.
 
-## Attachments
-
-Messages may include a list of attached references (`name`, `uri`). The URIs are
-opaque caller-defined handles — do not try to fetch or open them. Pass them
-through verbatim wherever they need to be referenced.
-
 ## Interaction style
 
 - The user is in a chat UI; there is no terminal. Keep responses short and

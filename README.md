@@ -10,9 +10,6 @@ isolated VM with full filesystem and process access via Blaxel's
 The image is deliberately generic. It ships with no slash-command plugins.
 You bring your own — see `Customizing` below.
 
-For an end-to-end example of a chatbot that uses this sandbox, see the
-companion repo `template-chatbot-claudecode`.
-
 ## Architecture
 
 Two processes run inside the container:
@@ -57,14 +54,6 @@ Blaxel-internal use.
 - Idle sessions (no SSE clients, no activity for `SESSION_IDLE_MS`) are
   reaped automatically — the session map does not grow forever.
 
-### Generic attachments
-
-- Messages can carry an `attachments: [{ name, uri }]` list.
-- The server appends a structured reference block to the prompt; the URIs are
-  opaque handles for the agent to pass through, never fetched.
-- Use this for blob storage references, signed URLs, internal handles — any
-  caller-defined scheme.
-
 ### Plugin discovery
 
 - Any plugins installed at image build time are discovered at runtime by
@@ -98,21 +87,25 @@ Blaxel-internal use.
   "sessionId": "stable id chosen by the caller",
   "files": [
     { "path": "src/main.ts", "content": "…" }
-  ],
-  "attachments": [
-    { "name": "spec.pdf", "uri": "your-scheme://blob/abc" }
   ]
 }
 ```
+
+For images, PDFs, or any other multimodal input, pass an array of standard
+Anthropic content blocks as `content` — the SDK supports image and document
+blocks natively. The sandbox does not invent a parallel attachments API.
 
 Response: `text/event-stream`. Event types:
 
 - `session` — `{ sessionId }`. First event, echoes the resolved session id.
 - `message` — every SDK message (assistant text, tool calls, tool results,
-  partial deltas, etc.).
+  partial deltas, etc.). To detect "turn finished," look for a `message`
+  with `type: "result"`.
 - `files` — `{ files: [{ path, content }] }`. Workspace snapshot, emitted
-  immediately before `done`.
-- `done` — `{ ok: true }`. Turn finished.
+  on each turn just before the `message` carrying `type: "result"`.
+- `done` — `{ ok: true }`. Emitted only when the SDK iterator closes
+  entirely (idle session reaped, server shutting down). Rare; not fired
+  after every turn.
 - `error` — `{ error }`. Server-side error.
 
 ### `POST /respond`
@@ -133,22 +126,26 @@ Returns `{ status, sessions, plugins }`.
 
 ### Locally with Docker
 
+Set your API key:
+
 ```sh
 cp .env.example .env
-# fill in ANTHROPIC_API_KEY
-
-make build
-make run
+# then open .env and fill in ANTHROPIC_API_KEY
 ```
 
-These run, in order:
+Build the image:
 
 ```sh
 docker build --platform linux/amd64 -t claude-sandbox .
+```
+
+Run it:
+
+```sh
 docker run --rm -p 4100:4100 --env-file .env claude-sandbox
 ```
 
-Then in another terminal:
+In another terminal, send a request:
 
 ```sh
 curl -N -X POST http://localhost:4100/chat \
@@ -160,16 +157,15 @@ curl -N -X POST http://localhost:4100/chat \
   }'
 ```
 
-You should see `session`, a stream of `message` events, a `files` snapshot,
-then `done`.
+You should see `session`, a stream of `message` events, a `files`
+snapshot, and finally a `message` with `type: "result"` — that's the
+end-of-turn marker. The SSE connection then stays open; close it
+client-side when you're done.
 
 ### Deploy to Blaxel
 
-```sh
-make deploy
-```
-
-Which runs:
+Requires the [Blaxel CLI](https://docs.blaxel.ai/Get-started) (`bl`) and a
+configured workspace.
 
 ```sh
 bl deploy -e .env
@@ -179,9 +175,6 @@ This builds the image on Blaxel's build host, pushes it to your Blaxel
 workspace, and registers the `claude-sandbox` sandbox image. From there,
 any Blaxel agent in the same workspace can spawn instances of it via
 `SandboxInstance.create({ image: "claude-sandbox", ... })`.
-
-For an end-to-end agent that drives this sandbox, see
-`template-chatbot-claudecode`.
 
 ## Configuration
 
@@ -200,9 +193,12 @@ For an end-to-end agent that drives this sandbox, see
 | `PLUGINS_INSTALLED_PATH`  | `/home/agent/.claude/plugins/installed_plugins.json` | Manifest used for plugin discovery.              |
 | `PLUGINS_CACHE_DIR`       | `/home/agent/.claude/plugins/cache`                  | Fallback plugin scan directory.                  |
 
-`ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` are baked at build time via
-`bl deploy -e .env`. Per-instance vars can be injected at sandbox creation
-time via the Blaxel API.
+`ANTHROPIC_API_KEY` is never baked into the image — it is injected at
+runtime via `--env-file .env` (local Docker) or by Blaxel from your `.env`
+when you run `bl deploy -e .env`. `ANTHROPIC_MODEL` has a default set in
+the Dockerfile (`ENV ANTHROPIC_MODEL=claude-sonnet-4-6`); override it the
+same way. Per-instance vars can be injected at sandbox creation time via
+the Blaxel API.
 
 ## Customizing
 
@@ -226,7 +222,7 @@ The sandbox is meant to be forked. Common knobs:
 .
 ├── Dockerfile          # Node 22 + sandbox-api + Claude Code, no plugins
 ├── LICENSE             # MIT
-├── Makefile            # build / run / deploy
+├── Makefile            # contributor shortcuts (lint, build, deploy)
 ├── README.md
 ├── CLAUDE.md           # generic project-level Claude instructions
 ├── blaxel.toml         # Blaxel sandbox manifest

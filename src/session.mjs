@@ -40,12 +40,6 @@ write here will be visible to the caller after the turn finishes.
 
 Stay inside \`${WORKSPACE}\`. Do not write outside it.
 
-## Attachments
-
-Messages may contain a list of attached references with names and URIs. The
-URIs are caller-defined storage references, not files you can read directly.
-Use them as opaque handles in any output that needs to point back at them.
-
 ## Interaction model
 
 The user interacts via a chat UI; there is no terminal. Format responses for
