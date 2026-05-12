@@ -1,10 +1,15 @@
+# Blaxel sandbox-api binary lives in this base image. Pinned via build arg
+# so deploys are reproducible. Bump SANDBOX_VERSION when Blaxel ships fixes.
+ARG SANDBOX_VERSION=latest
+FROM ghcr.io/blaxel-ai/sandbox:${SANDBOX_VERSION} AS sandbox-api
+
 FROM node:22-slim
 
 WORKDIR /app
 
-# Blaxel sandbox runtime API.
-# Provides filesystem and process APIs on port 8080. Required by Blaxel.
-COPY --from=ghcr.io/blaxel-ai/sandbox:latest /sandbox-api /usr/local/bin/sandbox-api
+# Pull the sandbox-api binary from the base image stage. Required by Blaxel —
+# provides filesystem and process APIs on port 8080.
+COPY --from=sandbox-api /sandbox-api /usr/local/bin/sandbox-api
 
 # Minimal system deps for Claude Code + the agent runtime.
 # `gosu` lets the entrypoint drop from root to the `agent` user.
@@ -13,11 +18,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ENV ANTHROPIC_MODEL="claude-sonnet-4-6"
 ENV WORKSPACE_DIR="/workspace"
 
+# `ANTHROPIC_MODEL` is intentionally NOT baked here. Provider/model selection
+# happens at runtime via `.env` (secrets) and `blaxel.toml`'s `[env]` block
+# (non-secret defaults). See docs/providers.md.
+
 # Claude Code CLI (provides the `claude` binary the SDK shells out to).
-RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force
+# Pinned to a known-good version for reproducible builds.
+ARG CLAUDE_CODE_VERSION=2.0.77
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force
 
 # Non-root runtime user. Created before any user-scoped Claude tooling so
 # everything lands in /home/agent/.claude with the right ownership.
@@ -31,17 +41,18 @@ RUN useradd -m -d /home/agent agent \
 #         claude plugin marketplace add owner/repo --scope user \
 #         && claude plugin install plugin-name@repo --scope user'
 #
-# `src/plugins.mjs` discovers anything installed under
-# /home/agent/.claude/plugins and registers it with the Agent SDK.
+# To add a standalone skill, COPY a SKILL.md into /home/agent/.claude/skills/:
+#
+#   COPY skills/my-skill /home/agent/.claude/skills/my-skill
+#   RUN chown -R agent:agent /home/agent/.claude/skills
+#
+# Either way the SDK auto-discovers them at runtime via
+# `settingSources: ["user", "project"]` in server/server.js — no explicit
+# plugin-loader code needed.
 
-# App code, project-level prompt, entrypoint.
-COPY CLAUDE.md /home/agent/.claude/CLAUDE.md
-RUN chown agent:agent /home/agent/.claude/CLAUDE.md
-
-COPY package.json /app/package.json
-COPY server.mjs /app/server.mjs
-COPY src /app/src
-RUN npm install --omit=dev && npm cache clean --force \
+# Agent server source — installs deps inside /app/server and runs from there.
+COPY server /app/server
+RUN cd /app/server && npm install --omit=dev && npm cache clean --force \
     && chown -R agent:agent /app
 
 COPY entrypoint.sh /entrypoint.sh

@@ -1,151 +1,109 @@
-# Claude Code Sandbox (for Blaxel)
+# Claude Code Sandbox
 
-A minimal sandbox image for running the **Claude Agent SDK** inside a
-**Blaxel sandbox** and exposing it as an HTTP/SSE service. Drop it behind any
-chat UI or agent, point it at a workspace, and you have an editor-aware
-Claude agent that streams its work back to the caller — running in a real
-isolated VM with full filesystem and process access via Blaxel's
-`sandbox-api`.
+A Blaxel sandbox image that runs the **Claude Agent SDK** inside an
+isolated container and exposes it as an HTTP/SSE service on port `4100`.
+Drop it behind any chat UI or agent and you get an editor-aware Claude
+agent that streams its work back to the caller.
 
-The image is deliberately generic. It ships with no slash-command plugins.
-You bring your own — see `Customizing` below.
+Structured to slot directly into
+[`blaxel-ai/sandbox/hub/claude-code/`](https://github.com/blaxel-ai/sandbox/tree/main/hub).
+For a working consumer — a Blaxel agent that spawns instances of this
+image and proxies a chatbot conversation through it — see
+[`template-chatbot-claudecode`](https://github.com/pipelex/template-chatbot-claudecode).
 
 ## Architecture
 
 Two processes run inside the container:
 
-- **`sandbox-api`** (port 8080, root) — Blaxel's sandbox runtime. Provides
-  filesystem and process APIs that Blaxel SDK clients use to inspect and
-  manipulate the container.
-- **`server.mjs`** (port 4100, non-root `agent` user) — Claude Agent SDK
-  wrapper. Owns the long-lived `query()` iterator, streams SDK events as SSE,
-  syncs the workspace before each turn, snapshots it after.
+- **`sandbox-api`** (port `8080`) — Blaxel's sandbox runtime. Generic
+  filesystem and process APIs. We didn't write this; it's the standard
+  binary every hub entry includes.
+- **`server/server.js`** (port `4100`, non-root `agent` user) — our
+  Node HTTP/SSE wrapper around the Claude Agent SDK. Exposes `/chat`,
+  `/respond`, `/health`. This is the layer that turns the low-level
+  `sandbox-api` into a high-level chat API.
 
-Only port 4100 is exposed publicly via Blaxel routing. `sandbox-api` is for
-Blaxel-internal use.
+This is the same shape as
+[`hub/jupyter-server/`](https://github.com/blaxel-ai/sandbox/tree/main/hub/jupyter-server),
+which runs `sandbox-api` plus a custom FastAPI server on port 8888.
 
 ## Features
 
-### Editor-synced workspace
+- **Editor-synced workspace** — caller sends files with each `/chat`
+  request; the server wipes and rewrites `WORKSPACE_DIR` so the agent
+  sees exactly what the caller sees. End-of-turn snapshot returns the
+  modified files via an `event: files` SSE frame.
+- **Streaming SSE** — `/chat` responds with `text/event-stream`,
+  forwarding every SDK message (text deltas, tool calls, tool results)
+  plus workspace snapshots. 15s keepalive comments. Multiple SSE
+  clients can attach to one session.
+- **Resumable sessions** — sessions are keyed by a caller-supplied
+  `sessionId`. The SDK session id is captured from the `init` event and
+  used to `resume` across HTTP requests, keeping multi-turn history.
+  Idle sessions reap after `SESSION_IDLE_MS`.
+- **Multimodal inputs** — text, image, and PDF content blocks pass
+  through the Agent SDK natively. No parallel attachments API.
+- **Provider-agnostic** — Anthropic API or Amazon Bedrock, configured
+  via env vars only. See *Provider auth* below.
+- **Plugin discovery** — any `claude plugin install …` line added to
+  the `Dockerfile` is auto-loaded by the SDK at runtime. No plugins are
+  installed by default.
+- **Bounded resource use** — request body capped at `MAX_BODY_BYTES`
+  (default 10 MiB); oversize returns 413. Server runs as non-root,
+  handles `SIGTERM`/`SIGINT` cleanly.
+- **Keepalive** — `: keepalive\n\n` comment frames every 15s on `/chat`
+  so corporate proxies (nginx, Cloudflare, etc.) don't kill the SSE
+  connection during slow Claude responses.
 
-- Caller sends the current set of files with every `/chat` request.
-- The server **wipes and rewrites** `WORKSPACE_DIR` so the agent's view always
-  matches the caller exactly — no drift between agent edits and caller edits.
-- After the agent finishes a turn, the server emits a `files` SSE event with
-  a snapshot of the workspace so the caller can re-hydrate authoritatively.
-- Supports nested directories. Path-traversal attempts (`..`, absolute paths)
-  are rejected.
+## Provider auth
 
-### Streaming over Server-Sent Events
+The Claude Agent SDK supports two backends. Pick **one** by setting the
+right env vars — the SDK reads them directly; the sandbox itself does
+nothing provider-specific.
 
-- `/chat` responds with `text/event-stream` and forwards every SDK message
-  (`message`, `files`, `done`, `error`).
-- 15-second keepalive comments keep proxies and load balancers from killing
-  idle streams.
-- Multiple SSE clients can attach to the same logical session.
-
-### Resumable sessions
-
-- Sessions are keyed by a caller-supplied `sessionId` (project id, doc id,
-  whatever you choose).
-- The SDK session id is captured from the `init` event and used to `resume:`
-  when a new message arrives after the previous query loop ended, so
-  multi-turn conversations keep their full history.
-- Idle sessions (no SSE clients, no activity for `SESSION_IDLE_MS`) are
-  reaped automatically — the session map does not grow forever.
-
-### Plugin discovery
-
-- Any plugins installed at image build time are discovered at runtime by
-  reading `installed_plugins.json` and remapping `/root/...` paths to
-  `/home/agent/...` (so build-as-root + run-as-agent works out of the box).
-- Falls back to scanning the plugin cache directory if the manifest is absent.
-- No plugins are installed in this template — see `Customizing`.
-
-### Bounded resource use
-
-- Request bodies are capped at `MAX_BODY_BYTES` (default 10 MiB).
-  Oversized requests are rejected with `413` before they hit memory.
-- Workspace snapshots are bounded by `SNAPSHOT_MAX_FILES` and
-  `SNAPSHOT_MAX_FILE_BYTES` so a giant artefact in the workspace cannot
-  blow up the SSE payload.
-- Agent runs are capped at `MAX_TURNS` turns.
-
-### Container lifecycle
-
-- Server runs as a non-root `agent` user under `gosu`.
-- Handles `SIGTERM` / `SIGINT`: closes sessions, flushes SSE clients, exits
-  cleanly with a 5s safety timeout.
-
-## API
-
-### `POST /chat`
-
-```jsonc
-{
-  "content": "string or Anthropic content blocks",
-  "sessionId": "stable id chosen by the caller",
-  "files": [
-    { "path": "src/main.ts", "content": "…" }
-  ]
-}
-```
-
-For images, PDFs, or any other multimodal input, pass an array of standard
-Anthropic content blocks as `content` — the SDK supports image and document
-blocks natively. The sandbox does not invent a parallel attachments API.
-
-Response: `text/event-stream`. Event types:
-
-- `session` — `{ sessionId }`. First event, echoes the resolved session id.
-- `message` — every SDK message (assistant text, tool calls, tool results,
-  partial deltas, etc.). To detect "turn finished," look for a `message`
-  with `type: "result"`.
-- `files` — `{ files: [{ path, content }] }`. Workspace snapshot, emitted
-  on each turn just before the `message` carrying `type: "result"`.
-- `done` — `{ ok: true }`. Emitted only when the SDK iterator closes
-  entirely (idle session reaped, server shutting down). Rare; not fired
-  after every turn.
-- `error` — `{ error }`. Server-side error.
-
-### `POST /respond`
-
-```jsonc
-{ "sessionId": "...", "content": "follow-up message" }
-```
-
-Pushes a follow-up message into an existing session. Use this when the SSE
-stream for `/chat` is still open and you want to add a new user turn without
-opening another stream.
-
-### `GET /health`
-
-Returns `{ status, sessions, plugins }`.
-
-## How to run
-
-### Locally with Docker
-
-Set your API key:
+### Anthropic API (default)
 
 ```sh
-cp .env.example .env
-# then open .env and fill in ANTHROPIC_API_KEY
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Build the image:
+### Amazon Bedrock
+
+Pick one of the two auth modes below.
+
+**Bedrock API key** (simplest):
 
 ```sh
-docker build --platform linux/amd64 -t claude-sandbox .
+CLAUDE_CODE_USE_BEDROCK=1
+AWS_REGION=us-west-2
+AWS_BEARER_TOKEN_BEDROCK=...
 ```
 
-Run it:
+**AWS IAM credentials**:
 
 ```sh
-docker run --rm -p 4100:4100 --env-file .env claude-sandbox
+CLAUDE_CODE_USE_BEDROCK=1
+AWS_REGION=us-west-2
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_SESSION_TOKEN=...        # optional, for temporary creds
 ```
 
-In another terminal, send a request:
+When using Bedrock, set `ANTHROPIC_MODEL` to a Bedrock-format id (e.g.
+`us.anthropic.claude-sonnet-4-5-20250929-v1:0`) — see Claude Code's
+[Bedrock docs](https://code.claude.com/docs/en/amazon-bedrock) for the
+full list.
+
+## How to run locally
+
+```sh
+docker build -t claude-code .
+docker run --rm -p 4100:4100 \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  claude-code
+```
+
+Send a request:
 
 ```sh
 curl -N -X POST http://localhost:4100/chat \
@@ -157,125 +115,195 @@ curl -N -X POST http://localhost:4100/chat \
   }'
 ```
 
-You should see `session`, a stream of `message` events, a `files`
-snapshot, and finally a `message` with `type: "result"` — that's the
-end-of-turn marker. The SSE connection then stays open; close it
-client-side when you're done.
+You'll see a stream of SSE events including a workspace snapshot and a
+final `message` with `type: "result"`.
 
-### Deploy to Blaxel
+## API surface (brief)
 
-Requires the [Blaxel CLI](https://docs.blaxel.ai/Get-started) (`bl`) and a
-configured workspace.
+- `POST /chat` — `{ sessionId, content, files }`. Responds with
+  `text/event-stream`. Event types: `session`, `message`, `files`,
+  `done`, `error`.
+- `POST /respond` — `{ sessionId, content }`. Pushes a follow-up message
+  into an existing session.
+- `GET /health` — returns `{ status, sessions, plugins }`.
 
-```sh
-bl deploy -e .env
-```
-
-This builds the image on Blaxel's build host, pushes it to your Blaxel
-workspace, and registers the `claude-sandbox` sandbox image. From there,
-any Blaxel agent in the same workspace can spawn instances of it via
-`SandboxInstance.create({ image: "claude-sandbox", ... })`.
+Full SSE event reference (including the SDK message types nested inside
+`event: message`) lives in
+[`template-chatbot-claudecode/docs/api.md`](https://github.com/pipelex/template-chatbot-claudecode/blob/main/docs/api.md).
 
 ## Configuration
 
-| Env var                   | Default                                              | Purpose                                          |
-|---------------------------|------------------------------------------------------|--------------------------------------------------|
-| `ANTHROPIC_API_KEY`       | —                                                    | Required. SDK auth.                              |
-| `ANTHROPIC_MODEL`         | `claude-sonnet-4-6`                                  | Model id used by the agent.                      |
-| `AGENT_PORT`              | `4100`                                               | HTTP port (matches `blaxel.toml`).               |
-| `WORKSPACE_DIR`           | `/workspace`                                         | Mirrored workspace root.                         |
-| `MAX_BODY_BYTES`          | `10485760` (10 MiB)                                  | Request body cap.                                |
-| `SESSION_IDLE_MS`         | `1800000` (30 min)                                   | Idle session reap threshold.                     |
-| `MAX_TURNS`               | `100`                                                | SDK turn cap per query.                          |
-| `SNAPSHOT_MAX_FILES`      | `200`                                                | Files included in end-of-turn snapshot.          |
-| `SNAPSHOT_MAX_FILE_BYTES` | `1048576`                                            | Per-file size limit for snapshots.               |
-| `SYSTEM_PROMPT_APPEND`    | empty                                                | Extra text appended to the system prompt.        |
-| `PLUGINS_INSTALLED_PATH`  | `/home/agent/.claude/plugins/installed_plugins.json` | Manifest used for plugin discovery.              |
-| `PLUGINS_CACHE_DIR`       | `/home/agent/.claude/plugins/cache`                  | Fallback plugin scan directory.                  |
+Provider auth env vars are listed above. Tuning knobs:
 
-`ANTHROPIC_API_KEY` is never baked into the image — it is injected at
-runtime via `--env-file .env` (local Docker) or by Blaxel from your `.env`
-when you run `bl deploy -e .env`. `ANTHROPIC_MODEL` has a default set in
-the Dockerfile (`ENV ANTHROPIC_MODEL=claude-sonnet-4-6`); override it the
-same way. Per-instance vars can be injected at sandbox creation time via
-the Blaxel API.
+| Env var                   | Default      | Purpose                                          |
+|---------------------------|--------------|--------------------------------------------------|
+| `ANTHROPIC_MODEL`         | SDK default  | Model id. Use a Bedrock-format id when on Bedrock. |
+| `AGENT_PORT`              | `4100`       | HTTP port for the agent server.                  |
+| `WORKSPACE_DIR`           | `/workspace` | Mirrored workspace root.                         |
+| `MAX_BODY_BYTES`          | `10485760`   | Request body cap (10 MiB).                       |
+| `SESSION_IDLE_MS`         | `1800000`    | Idle session reap threshold (30 min).            |
+| `MAX_TURNS`               | `100`        | SDK turn cap per query.                          |
+| `SNAPSHOT_MAX_FILES`      | `200`        | Files included in end-of-turn snapshot.          |
+| `SNAPSHOT_MAX_FILE_BYTES` | `1048576`    | Per-file size limit for snapshots.               |
+| `SYSTEM_PROMPT_APPEND`    | empty        | Extra text appended to the system prompt.        |
 
-## Customizing
-
-The sandbox is meant to be forked. Common knobs:
-
-- **Persona / scope rules** — edit `CLAUDE.md`. Copied into
-  `/home/agent/.claude/CLAUDE.md` at build time and loaded by the SDK as
-  project-level instructions.
-- **Extra system prompt** — set `SYSTEM_PROMPT_APPEND` at runtime; appended
-  to the Claude Code preset without rebuilding the image. Useful for
-  per-instance personas injected by the Blaxel API.
-- **Slash-command plugins** — add `claude plugin install ...` lines to the
-  `Dockerfile`. `src/plugins.mjs` discovers them at runtime and registers
-  them with the SDK automatically. Examples:
-  - [MTHDS](https://mthds.ai) — `/mthds-build`, `/mthds-edit`, ...
-  - [gstack](https://github.com/garrytan/gstack) — `/qa`, `/ship`, `/review`, ...
-
-## Project layout
-
-```
-.
-├── Dockerfile          # Node 22 + sandbox-api + Claude Code, no plugins
-├── LICENSE             # MIT
-├── Makefile            # contributor shortcuts (lint, build, deploy)
-├── README.md
-├── CLAUDE.md           # generic project-level Claude instructions
-├── blaxel.toml         # Blaxel sandbox manifest
-├── entrypoint.sh       # boots sandbox-api, then the agent server
-├── package.json        # @anthropic-ai/claude-agent-sdk
-├── server.mjs          # entrypoint: HTTP server boot + signal handling
-├── src/
-│   ├── config.mjs      # env-driven config + log()
-│   ├── plugins.mjs     # Claude Agent SDK plugin discovery
-│   ├── workspace.mjs   # editor-synced workspace ops (sync, snapshot, path safety)
-│   ├── session.mjs     # MessageQueue, AgentSession, sessions Map, idle reaper
-│   └── routes.mjs      # HTTP/SSE handlers for /chat, /respond, /health
-├── docs/
-│   ├── architecture.md     # module breakdown, request flow, dependency graph
-│   ├── sdk-integration.md  # what we add on top of @anthropic-ai/claude-agent-sdk
-│   └── workspace-sync.md   # the editor-synced workspace pattern, in detail
-├── .env.example
-└── .gitignore
-```
-
-## SSE event reference
-
-A consumer reading the `/chat` stream needs to handle two layers:
-
-1. **Server SSE event types** (the `event:` line) — set by this server.
-2. **SDK message types** (the `type:` field inside `event: message`'s JSON) —
-   passed through verbatim from the Claude Agent SDK.
-
-For a typical chat UI:
-
-| Where it comes from               | What it is                                  | What your UI does                                           |
-|-----------------------------------|---------------------------------------------|-------------------------------------------------------------|
-| `event: session`                  | sessionId echo                              | Store it; reuse on follow-ups.                              |
-| `event: message` `type: system`   | Init metadata (model, tools, plugins)       | Optional "connected" indicator; otherwise ignore.           |
-| `event: message` `type: stream_event` `delta: text_delta` | Live token of assistant text | **Append to current chat bubble** for live streaming.       |
-| `event: message` `type: assistant` (text block)      | Final assistant text          | If you stream via `text_delta`, ignore. Otherwise render.   |
-| `event: message` `type: assistant` (tool_use block)  | Claude is calling a tool      | Render a tool-call widget.                                  |
-| `event: message` `type: user` (tool_result)          | Tool output coming back       | Render inline / collapsed under the tool widget.            |
-| `event: files`                    | End-of-turn workspace snapshot              | **Replace editor state** with `files`.                      |
-| `event: message` `type: result`   | Turn finished, with cost/usage              | Mark chat as done; optionally show cost.                    |
-| `event: done`                     | SDK iterator closed (rare)                  | Close the connection.                                       |
-| `event: error`                    | Server error                                | Show error toast.                                           |
-| `: keepalive`                     | Comment line every 15s                      | Ignore.                                                     |
-
-For a working SSE parser and a Fastify agent that proxies this stream, see
-`template-chatbot-claudecode`.
+These can be passed per-instance via `SandboxInstance.create({ envs })`
+from a driver agent (see `template-chatbot-claudecode/src/agent.ts`).
 
 ## Authentication
 
-This server has no auth of its own — Blaxel gates inbound traffic at the
-platform layer (private previews, workspace tokens). Do not run this image
-outside a Blaxel sandbox without putting an authenticating proxy in front of
-it.
+This server has no auth of its own — Blaxel gates inbound traffic at
+the platform layer (private previews, workspace tokens). Do not run
+this image outside a Blaxel sandbox without putting an authenticating
+proxy in front of it.
+
+## Customizing — adding skills and plugins
+
+The Claude Agent SDK in this sandbox runs with
+`settingSources: ["user", "project"]`, so it auto-discovers everything
+under `/home/agent/.claude/`. Three paths to extend it, from canonical
+to advanced:
+
+### Path 1: bake plugins or skills into the image (canonical)
+
+The standard pattern. Fork the repo, edit the `Dockerfile`, rebuild,
+redeploy. Every sandbox instance spawned from the new image inherits
+your additions.
+
+**Install a Claude Code marketplace plugin:**
+
+```dockerfile
+RUN gosu agent bash -lc '\
+      claude plugin marketplace add owner/repo --scope user \
+      && claude plugin install plugin-name@repo --scope user'
+```
+
+Real examples:
+
+```dockerfile
+# MTHDS — /mthds-build, /mthds-edit, ...
+RUN gosu agent bash -lc '\
+      claude plugin marketplace add mthds-ai/mthds-plugins --scope user \
+      && claude plugin install mthds@mthds-plugins --scope user'
+
+# gstack — /qa, /ship, /review, ...
+RUN gosu agent bash -lc '\
+      git clone --depth 1 https://github.com/garrytan/gstack.git \
+        /home/agent/.claude/skills/gstack \
+      && cd /home/agent/.claude/skills/gstack && ./setup -q || true'
+```
+
+**Bake a single standalone skill:**
+
+A skill is just a `SKILL.md` with YAML frontmatter. Create
+`skills/my-skill/SKILL.md` in this repo:
+
+```markdown
+---
+name: my-skill
+description: When to use this skill — one short sentence.
+---
+
+Tell Claude how to do the thing here. Regular markdown.
+```
+
+Then `COPY` it into the image:
+
+```dockerfile
+COPY skills/my-skill /home/agent/.claude/skills/my-skill
+RUN chown -R agent:agent /home/agent/.claude/skills
+```
+
+Rebuild. The new `/my-skill` slash command is available. Verify via
+the `init` SSE event — the `skills` array will list your new entry.
+
+### Path 2: drop a skill into a *running* sandbox via `sandbox-api`
+
+A skill is just markdown on disk. A consumer (e.g. the chatbot template
+or any code holding a Blaxel `SandboxInstance` handle) can write a skill
+into a live container using Blaxel's filesystem API:
+
+```ts
+import { SandboxInstance } from "@blaxel/core";
+
+const sandbox = await SandboxInstance.get("claude-some-session");
+await sandbox.fs.write(
+  "/home/agent/.claude/skills/my-skill/SKILL.md",
+  `---
+name: my-skill
+description: Custom skill the user just enabled.
+---
+
+Reply with: "I have the my-skill skill loaded."`,
+);
+
+// Next /chat will see it via settingSources.
+```
+
+Useful for **per-tenant or per-session toolkits** without rebuilding the
+image. The skill is live until the sandbox is reaped — it doesn't
+persist across container restarts unless you mount a Blaxel volume that
+covers `/home/agent/.claude/skills/` (out of scope here; see
+[`docs/providers.md` in the chatbot template](https://github.com/pipelex/template-chatbot-claudecode/blob/main/docs/providers.md)
+for the volume pattern).
+
+Note: this only works for **skills** (markdown files). Marketplace
+**plugins** with runtime code can't be safely installed this way —
+they need build-time setup, see Path 1 or Path 3.
+
+### Path 3: install plugins at sandbox creation time via env (extension point)
+
+Not in the entrypoint today, but easy to wire if you need it.
+
+A consumer can pass an env var via Blaxel's per-instance injection:
+
+```ts
+SandboxInstance.create({
+  image: "claude-code-sandbox",
+  envs: [
+    { name: "INSTALL_PLUGINS", value: "mthds-ai/mthds-plugins:mthds" },
+  ],
+});
+```
+
+Add ~10 lines to `entrypoint.sh` to parse `INSTALL_PLUGINS` and call
+`claude plugin install` before starting the agent server. Adds 1–3s of
+cold-start per plugin.
+
+Why we didn't ship this:
+- Blaxel constraint: *"it is not possible to add or update environment
+  variables for a sandbox after it is created"* (from
+  [Blaxel docs](https://docs.blaxel.ai/Sandboxes/Templates)). So this
+  per-instance config is decided once at creation and can't be changed.
+- For most use cases, baking plugins into the image (Path 1) is simpler
+  and faster.
+
+Open a PR if you want this wired up — it's a clean extension point.
+
+### Summary
+
+| You want… | Use path | Rebuild? | Persistent? |
+|---|---|---|---|
+| Every sandbox gets a specific toolkit | 1 (bake in) | Yes, once | Yes |
+| Each user/session gets a custom skill | 2 (`sandbox.fs.write`) | No | No (lost on reap) |
+| Each session picks from a plugin set at creation | 3 (entrypoint env, not shipped) | Build once + wire entrypoint | Yes (lifetime of sandbox) |
+
+For deep-dive material — module breakdown, SDK integration rationale,
+workspace-sync mechanics — see
+[`template-chatbot-claudecode/docs/`](https://github.com/pipelex/template-chatbot-claudecode/tree/main/docs).
+
+## Test
+
+Bash smoke test (requires the image running locally):
+
+```sh
+docker run --rm -p 4100:4100 -e ANTHROPIC_API_KEY=sk-ant-... claude-code &
+./tests/smoke.sh
+```
+
+Tests `/health`, `/chat` happy path, session resume, 400 on missing
+content, 400 on malformed JSON, 413 on oversize body, 404 on unknown
+route. Uses `curl` + `jq` only — no test framework.
 
 ## License
 

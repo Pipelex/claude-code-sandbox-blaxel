@@ -1,0 +1,22 @@
+{
+  "name": "claude-code",
+  "displayName": "Claude Code",
+  "categories": ["ai", "backend"],
+  "description": "Claude Agent SDK running inside an isolated sandbox with HTTP/SSE streaming.",
+  "longDescription": "A sandbox image that runs the Claude Agent SDK inside an isolated Blaxel container and exposes it as an HTTP/SSE service. Drop it behind any chat UI or agent and you get an editor-aware Claude agent that streams its work back to the caller. Supports both the Anthropic API and Amazon Bedrock via env vars. Built on Node 22, ships the Claude Code CLI, and stays generic — bring your own slash-command plugins via the Dockerfile.",
+  "url": "https://github.com/pipelex/claude-code-sandbox-blaxel",
+  "icon": "https://avatars.githubusercontent.com/u/76263028?s=200&v=4",
+  "memory": 4096,
+  "ports": [
+    {
+      "name": "sandbox-api",
+      "target": 8080,
+      "protocol": "HTTP"
+    },
+    {
+      "name": "agent-server",
+      "target": 4100,
+      "protocol": "HTTP"
+    }
+  ]
+}
