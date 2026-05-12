@@ -270,14 +270,6 @@ Add ~10 lines to `entrypoint.sh` to parse `INSTALL_PLUGINS` and call
 `claude plugin install` before starting the agent server. Adds 1–3s of
 cold-start per plugin.
 
-Why we didn't ship this:
-- Blaxel constraint: *"it is not possible to add or update environment
-  variables for a sandbox after it is created"* (from
-  [Blaxel docs](https://docs.blaxel.ai/Sandboxes/Templates)). So this
-  per-instance config is decided once at creation and can't be changed.
-- For most use cases, baking plugins into the image (Path 1) is simpler
-  and faster.
-
 Open a PR if you want this wired up — it's a clean extension point.
 
 ### Summary
