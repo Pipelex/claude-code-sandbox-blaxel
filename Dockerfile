@@ -35,20 +35,11 @@ RUN useradd -m -d /home/agent agent \
     && mkdir -p /workspace /home/agent/.claude/plugins \
     && chown -R agent:agent /workspace /home/agent
 
-# To install Claude Code marketplace plugins at build time, add lines like:
-#
-#   RUN gosu agent bash -lc '\
-#         claude plugin marketplace add owner/repo --scope user \
-#         && claude plugin install plugin-name@repo --scope user'
-#
-# To add a standalone skill, COPY a SKILL.md into /home/agent/.claude/skills/:
-#
-#   COPY skills/my-skill /home/agent/.claude/skills/my-skill
-#   RUN chown -R agent:agent /home/agent/.claude/skills
-#
-# Either way the SDK auto-discovers them at runtime via
-# `settingSources: ["user", "project"]` in server/server.js — no explicit
-# plugin-loader code needed.
+# This image stays generic on purpose. Consumers extend Claude's capabilities
+# from the OUTSIDE (no image fork needed) by writing skill files into the
+# running container via Blaxel's `sandbox.fs.write` API — the SDK auto-
+# discovers them via `settingSources: ["user", "project"]`.
+# See template-chatbot-claudecode for a working demo of this pattern.
 
 # Agent server source — installs deps inside /app/server and runs from there.
 COPY server /app/server

@@ -161,71 +161,13 @@ the platform layer (private previews, workspace tokens). Do not run
 this image outside a Blaxel sandbox without putting an authenticating
 proxy in front of it.
 
-## Customizing — adding skills and plugins
+## Extending Claude with skills (no image changes)
 
 The Claude Agent SDK in this sandbox runs with
-`settingSources: ["user", "project"]`, so it auto-discovers everything
-under `/home/agent/.claude/`. Three paths to extend it, from canonical
-to advanced:
-
-### Path 1: bake plugins or skills into the image (canonical)
-
-The standard pattern. Fork the repo, edit the `Dockerfile`, rebuild,
-redeploy. Every sandbox instance spawned from the new image inherits
-your additions.
-
-**Install a Claude Code marketplace plugin:**
-
-```dockerfile
-RUN gosu agent bash -lc '\
-      claude plugin marketplace add owner/repo --scope user \
-      && claude plugin install plugin-name@repo --scope user'
-```
-
-Real examples:
-
-```dockerfile
-# MTHDS — /mthds-build, /mthds-edit, ...
-RUN gosu agent bash -lc '\
-      claude plugin marketplace add mthds-ai/mthds-plugins --scope user \
-      && claude plugin install mthds@mthds-plugins --scope user'
-
-# gstack — /qa, /ship, /review, ...
-RUN gosu agent bash -lc '\
-      git clone --depth 1 https://github.com/garrytan/gstack.git \
-        /home/agent/.claude/skills/gstack \
-      && cd /home/agent/.claude/skills/gstack && ./setup -q || true'
-```
-
-**Bake a single standalone skill:**
-
-A skill is just a `SKILL.md` with YAML frontmatter. Create
-`skills/my-skill/SKILL.md` in this repo:
-
-```markdown
----
-name: my-skill
-description: When to use this skill — one short sentence.
----
-
-Tell Claude how to do the thing here. Regular markdown.
-```
-
-Then `COPY` it into the image:
-
-```dockerfile
-COPY skills/my-skill /home/agent/.claude/skills/my-skill
-RUN chown -R agent:agent /home/agent/.claude/skills
-```
-
-Rebuild. The new `/my-skill` slash command is available. Verify via
-the `init` SSE event — the `skills` array will list your new entry.
-
-### Path 2: drop a skill into a *running* sandbox via `sandbox-api`
-
-A skill is just markdown on disk. A consumer (e.g. the chatbot template
-or any code holding a Blaxel `SandboxInstance` handle) can write a skill
-into a live container using Blaxel's filesystem API:
+`settingSources: ["user", "project"]`, so it auto-discovers anything
+the **consumer** writes to `/home/agent/.claude/skills/` at runtime
+using Blaxel's filesystem API — **no image rebuild, no fork of this
+repo**.
 
 ```ts
 import { SandboxInstance } from "@blaxel/core";
@@ -235,54 +177,34 @@ await sandbox.fs.write(
   "/home/agent/.claude/skills/my-skill/SKILL.md",
   `---
 name: my-skill
-description: Custom skill the user just enabled.
+description: Custom skill the consumer just enabled.
 ---
 
-Reply with: "I have the my-skill skill loaded."`,
+Tell Claude how to behave when this skill is active.`,
 );
 
-// Next /chat will see it via settingSources.
+// Next /chat through this sandbox will see /my-skill.
 ```
 
-Useful for **per-tenant or per-session toolkits** without rebuilding the
-image. The skill is live until the sandbox is reaped — it doesn't
-persist across container restarts unless you mount a Blaxel volume that
-covers `/home/agent/.claude/skills/` (out of scope here; see
-[`docs/providers.md` in the chatbot template](https://github.com/pipelex/template-chatbot-claudecode/blob/main/docs/providers.md)
-for the volume pattern).
+Useful for **per-tenant or per-session toolkits**. The skill stays on
+disk until the sandbox is reaped; to make it durable across reaps,
+mount a Blaxel volume that covers `/home/agent/.claude/skills/`.
 
-Note: this only works for **skills** (markdown files). Marketplace
-**plugins** with runtime code can't be safely installed this way —
-they need build-time setup, see Path 1 or Path 3.
+The companion repo
+[`template-chatbot-claudecode`](https://github.com/pipelex/template-chatbot-claudecode)
+ships a working demo of this pattern (look for `pushSampleSkill` in
+its `src/agent.ts`). Read its
+["Extending Claude with Skills"](https://github.com/pipelex/template-chatbot-claudecode#-extending-claude-with-skills)
+section for a runnable example.
 
-### Path 3: install plugins at sandbox creation time via env (extension point)
+### What about Claude Code marketplace plugins?
 
-Not in the entrypoint today, but easy to wire if you need it.
-
-A consumer can pass an env var via Blaxel's per-instance injection:
-
-```ts
-SandboxInstance.create({
-  image: "claude-code-sandbox",
-  envs: [
-    { name: "INSTALL_PLUGINS", value: "mthds-ai/mthds-plugins:mthds" },
-  ],
-});
-```
-
-Add ~10 lines to `entrypoint.sh` to parse `INSTALL_PLUGINS` and call
-`claude plugin install` before starting the agent server. Adds 1–3s of
-cold-start per plugin.
-
-Open a PR if you want this wired up — it's a clean extension point.
-
-### Summary
-
-| You want… | Use path | Rebuild? | Persistent? |
-|---|---|---|---|
-| Every sandbox gets a specific toolkit | 1 (bake in) | Yes, once | Yes |
-| Each user/session gets a custom skill | 2 (`sandbox.fs.write`) | No | No (lost on reap) |
-| Each session picks from a plugin set at creation | 3 (entrypoint env, not shipped) | Build once + wire entrypoint | Yes (lifetime of sandbox) |
+Marketplace plugins (MTHDS, gstack, etc.) ship runtime code that has
+to live in the sandbox image. **First-class plugin support via the
+consumer agent is coming.** For now this sandbox image stays bare; if
+you absolutely need a plugin today you can fork this repo and add a
+`RUN claude plugin install …` line to the Dockerfile, but most users
+shouldn't need to — that path is the exception, not the convention.
 
 For deep-dive material — module breakdown, SDK integration rationale,
 workspace-sync mechanics — see
