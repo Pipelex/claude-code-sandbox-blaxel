@@ -1,0 +1,10 @@
+{
+  "name": "claude-code-sandbox-server",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "main": "server.js",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.0"
+  }
+}
