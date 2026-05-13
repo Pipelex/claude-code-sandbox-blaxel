@@ -7,9 +7,13 @@ agent that streams its work back to the caller.
 
 Structured to slot directly into
 [`blaxel-ai/sandbox/hub/claude-code/`](https://github.com/blaxel-ai/sandbox/tree/main/hub).
-For a working consumer — a Blaxel agent that spawns instances of this
-image and proxies a chatbot conversation through it — see
-[`template-chatbot-claudecode`](https://github.com/pipelex/template-chatbot-claudecode).
+
+> **👉 Working example:** see
+> [`template-chatbot-claudecode`](https://github.com/pipelex/template-chatbot-claudecode)
+> — a Blaxel agent template that spawns instances of this image, forwards
+> provider auth per session, mints private preview tokens, and proxies a
+> streaming chatbot conversation through to the sandbox. Production-shaped
+> consumer, ~250 lines of TypeScript, ready to fork.
 
 ## Architecture
 
