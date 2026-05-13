@@ -98,6 +98,18 @@ else
   fail "expected 413, got $code"
 fi
 
+# ── 400 on array content (SDK only accepts strings) ─────────────────────
+echo
+echo "[6b] POST /chat — array content returns 400"
+code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$URL/chat" \
+  -H 'Content-Type: application/json' \
+  -d '{"sessionId":"x","content":[{"type":"text","text":"hi"}]}')
+if [ "$code" = "400" ]; then
+  ok "400 on non-string content"
+else
+  fail "expected 400, got $code"
+fi
+
 # ── 404 on unknown route ─────────────────────────────────────────────────
 echo
 echo "[7] GET /nope — returns 404"

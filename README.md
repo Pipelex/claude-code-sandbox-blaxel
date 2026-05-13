@@ -33,31 +33,25 @@ which runs `sandbox-api` plus a custom FastAPI server on port 8888.
 
 ## Features
 
-- **Editor-synced workspace** — caller sends files with each `/chat`
-  request; the server wipes and rewrites `WORKSPACE_DIR` so the agent
-  sees exactly what the caller sees. End-of-turn snapshot returns the
-  modified files via an `event: files` SSE frame.
 - **Streaming SSE** — `/chat` responds with `text/event-stream`,
-  forwarding every SDK message (text deltas, tool calls, tool results)
-  plus workspace snapshots. 15s keepalive comments. Multiple SSE
-  clients can attach to one session.
+  forwarding every SDK message (text deltas, tool calls, tool results,
+  init, result) verbatim. 15s `: keepalive` comments survive nginx /
+  Cloudflare timeouts.
 - **Resumable sessions** — sessions are keyed by a caller-supplied
   `sessionId`. The SDK session id is captured from the `init` event and
   used to `resume` across HTTP requests, keeping multi-turn history.
-  Idle sessions reap after `SESSION_IDLE_MS`.
-- **Multimodal inputs** — text, image, and PDF content blocks pass
-  through the Agent SDK natively. No parallel attachments API.
+  Persisted to `SESSION_MAP_PATH` (a JSON file next to the SDK's own
+  session JSONLs).
+- **Skill discovery** — `settingSources: ["user", "project"]` makes the
+  SDK auto-load anything dropped under `/home/agent/.claude/skills/`.
+  Consumers push skills at runtime via Blaxel's `sandbox.fs.write` API
+  — no image rebuild, no plugin install.
 - **Provider-agnostic** — Anthropic API or Amazon Bedrock, configured
   via env vars only. See *Provider auth* below.
-- **Plugin discovery** — any `claude plugin install …` line added to
-  the `Dockerfile` is auto-loaded by the SDK at runtime. No plugins are
-  installed by default.
 - **Bounded resource use** — request body capped at `MAX_BODY_BYTES`
   (default 10 MiB); oversize returns 413. Server runs as non-root,
-  handles `SIGTERM`/`SIGINT` cleanly.
-- **Keepalive** — `: keepalive\n\n` comment frames every 15s on `/chat`
-  so corporate proxies (nginx, Cloudflare, etc.) don't kill the SSE
-  connection during slow Claude responses.
+  handles `SIGTERM`/`SIGINT` cleanly. SDK is aborted on client
+  disconnect so you don't keep paying for tokens after the user is gone.
 
 ## Provider auth
 
@@ -124,35 +118,32 @@ final `message` with `type: "result"`.
 
 ## API surface (brief)
 
-- `POST /chat` — `{ sessionId, content, files }`. Responds with
-  `text/event-stream`. Event types: `session`, `message`, `files`,
-  `done`, `error`.
-- `POST /respond` — `{ sessionId, content }`. Pushes a follow-up message
-  into an existing session.
-- `GET /health` — returns `{ status, sessions, plugins }`.
+- `POST /chat` — `{ sessionId?, content }` where `content` is a non-empty
+  string. Responds with `text/event-stream`; every frame is
+  `event: message` carrying a raw Claude Agent SDK message (text deltas,
+  tool calls, tool results, init, result). One `event: error` frame on
+  failure. Send another `POST /chat` with the same `sessionId` to continue
+  the session.
+- `GET /health` — returns `{ status: "ok" }`.
 
-Full SSE event reference (including the SDK message types nested inside
-`event: message`) lives in
-[`template-chatbot-claudecode/docs/api.md`](https://github.com/pipelex/template-chatbot-claudecode/blob/main/docs/api.md).
+Each `event: message` carries a raw Claude Agent SDK message. The SDK
+message shape (`type: "system" | "stream_event" | "assistant" | "result"`,
+etc.) is the source of truth — see
+[`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk).
 
 ## Configuration
 
 Provider auth env vars are listed above. Tuning knobs:
 
-| Env var                   | Default      | Purpose                                          |
-|---------------------------|--------------|--------------------------------------------------|
-| `ANTHROPIC_MODEL`         | SDK default  | Model id. Use a Bedrock-format id when on Bedrock. |
-| `AGENT_PORT`              | `4100`       | HTTP port for the agent server.                  |
-| `WORKSPACE_DIR`           | `/workspace` | Mirrored workspace root.                         |
-| `MAX_BODY_BYTES`          | `10485760`   | Request body cap (10 MiB).                       |
-| `SESSION_IDLE_MS`         | `1800000`    | Idle session reap threshold (30 min).            |
-| `MAX_TURNS`               | `100`        | SDK turn cap per query.                          |
-| `SNAPSHOT_MAX_FILES`      | `200`        | Files included in end-of-turn snapshot.          |
-| `SNAPSHOT_MAX_FILE_BYTES` | `1048576`    | Per-file size limit for snapshots.               |
-| `SYSTEM_PROMPT_APPEND`    | empty        | Extra text appended to the system prompt.        |
+| Env var            | Default                                            | Purpose                                                    |
+|--------------------|----------------------------------------------------|------------------------------------------------------------|
+| `ANTHROPIC_MODEL`  | SDK default                                        | Model id. Use a Bedrock-format id when on Bedrock.         |
+| `AGENT_PORT`       | `4100`                                             | HTTP port for the agent server.                            |
+| `WORKSPACE_DIR`    | `/workspace`                                       | Working directory passed to the Claude Agent SDK.          |
+| `MAX_BODY_BYTES`   | `10485760` (10 MiB)                                | Request body cap; oversize returns 413.                    |
+| `SESSION_MAP_PATH` | `/home/agent/.claude/projects/.session-map.json`   | Persisted caller-sessionId → SDK-session-id map.           |
 
-These can be passed per-instance via `SandboxInstance.create({ envs })`
-from a driver agent (see `template-chatbot-claudecode/src/agent.ts`).
+That's the full surface. The sandbox is deliberately small.
 
 ## Authentication
 

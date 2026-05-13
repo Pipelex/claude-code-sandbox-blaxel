@@ -1,5 +1,7 @@
-# Blaxel sandbox-api binary lives in this base image. Pinned via build arg
-# so deploys are reproducible. Bump SANDBOX_VERSION when Blaxel ships fixes.
+# Blaxel sandbox-api binary lives in this base image. The default is `latest`
+# for convenience. For reproducible builds, override at build time with a
+# specific tag or digest, e.g.:
+#   docker build --build-arg SANDBOX_VERSION=sha256:abc123... .
 ARG SANDBOX_VERSION=latest
 FROM ghcr.io/blaxel-ai/sandbox:${SANDBOX_VERSION} AS sandbox-api
 

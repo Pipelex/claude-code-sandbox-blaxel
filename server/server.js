@@ -15,7 +15,15 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 
 const PORT = parseInt(process.env.AGENT_PORT || "4100", 10);
 const WORKSPACE = process.env.WORKSPACE_DIR || "/workspace";
-const MAX_BODY_BYTES = parseInt(process.env.MAX_BODY_BYTES || String(10 * 1024 * 1024), 10);
+// Use parseInt + isFinite + >0 guard rather than `parseInt(env || default)` —
+// a non-numeric env value would otherwise silently produce NaN and disable
+// the size cap (since `size > NaN` is always false).
+const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
+const parsedMaxBodyBytes = parseInt(process.env.MAX_BODY_BYTES ?? "", 10);
+const MAX_BODY_BYTES =
+  Number.isFinite(parsedMaxBodyBytes) && parsedMaxBodyBytes > 0
+    ? parsedMaxBodyBytes
+    : DEFAULT_MAX_BODY_BYTES;
 const KEEPALIVE_MS = 15_000;
 
 // Caller-chosen sessionId → SDK session id, used to drive `resume`.
@@ -92,10 +100,11 @@ function sse(res, event, data) {
 async function handleChat(req, res) {
   const { content, sessionId } = await readBody(req, MAX_BODY_BYTES);
 
-  const hasStringContent = typeof content === "string" && content.length > 0;
-  const hasBlocksContent = Array.isArray(content) && content.length > 0;
-  if (!hasStringContent && !hasBlocksContent) {
-    return sendJSON(res, 400, { error: "content (string or array of content blocks) required" });
+  // The Claude Agent SDK's `query()` only accepts `prompt: string` or
+  // `AsyncIterable<SDKUserMessage>` — not raw content-block arrays. Reject
+  // anything else up front rather than handing the SDK a bad shape.
+  if (typeof content !== "string" || content.length === 0) {
+    return sendJSON(res, 400, { error: "content (non-empty string) required" });
   }
 
   res.writeHead(200, {
@@ -128,6 +137,8 @@ async function handleChat(req, res) {
 
   const options = {
     permissionMode: "bypassPermissions",
+    // Required companion flag for "bypassPermissions" per the SDK's own type docs.
+    allowDangerouslySkipPermissions: true,
     settingSources: ["user", "project"],
     includePartialMessages: true,
     cwd: WORKSPACE,
