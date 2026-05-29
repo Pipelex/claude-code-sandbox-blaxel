@@ -123,6 +123,42 @@ curl -N -X POST http://localhost:4100/chat \
 You'll see a stream of SSE events including a workspace snapshot and a
 final `message` with `type: "result"`.
 
+## Deploy to Blaxel
+
+1. **Install the [Blaxel CLI](https://docs.blaxel.ai/Get-started)** and
+   log in:
+   ```sh
+   bl login YOUR-WORKSPACE
+   ```
+2. **Create `.env`** with your provider credentials:
+   ```sh
+   ANTHROPIC_API_KEY=sk-ant-...
+   ```
+   > ⚠️ **Do not commit `.env`** — it holds your API key. Confirm it's
+   > in `.gitignore` before you push.
+3. **Deploy**:
+   ```sh
+   bl deploy
+   ```
+4. **Create a private preview URL** for the agent port (`4100`) via the
+   [Blaxel Console](https://app.blaxel.ai) (Sandboxes → your sandbox →
+   *Previews*). The console also shows the equivalent SDK snippet for
+   minting previews programmatically.
+5. **Test it.** Include the preview token in the URL:
+   ```sh
+   curl -N -X POST https://<preview-id>.preview.bl.run/chat?bl_preview_token=<token> \
+     -H 'Content-Type: application/json' \
+     -d '{
+       "sessionId": "demo",
+       "content": "Create hello.txt with the word hi inside.",
+       "files": []
+     }'
+   ```
+
+For an end-to-end example that programmatically provisions a sandbox,
+mints a preview, and proxies a chatbot UI, see
+[`template-chatbot-claudecode`](https://github.com/pipelex/template-chatbot-claudecode).
+
 ## API surface (brief)
 
 - `POST /chat` — `{ sessionId?, content }` where `content` is a non-empty
