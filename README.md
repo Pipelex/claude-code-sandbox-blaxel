@@ -231,6 +231,40 @@ its `src/agent.ts`). Read its
 ["Extending Claude with Skills"](https://github.com/pipelex/template-chatbot-claudecode#-extending-claude-with-skills)
 section for a runnable example.
 
+### Installing a complete skills bundle
+
+If you'd rather install a full bundle (a published skill pack or
+marketplace plugin) instead of writing individual files, run one of
+these inside `/home/agent`:
+
+```sh
+# bundle from an npm-style "skills" package
+npx skills add <package>
+
+# Claude Code marketplace plugin
+claude plugin marketplace add <name> && claude plugin install <name>
+```
+
+Both work either interactively over `bl connect` (terminal into the
+running sandbox) or non-interactively from your host code via
+[`sandbox.process.exec`](https://docs.blaxel.ai/Sandboxes/Processes#execute-command).
+
+### Adding skills to a local Docker run
+
+When running the image with `docker run` (not on Blaxel), the
+`sandbox.fs.write` API isn't available. Mount a host directory over
+`/home/agent/.claude/skills/` instead:
+
+```sh
+docker run --rm -p 4100:4100 \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -v "$(pwd)/my-skills:/home/agent/.claude/skills" \
+  claude-code
+```
+
+Anything you drop under `./my-skills/<skill-name>/SKILL.md` on the host
+will be auto-discovered by the SDK on the next `/chat` request.
+
 ### What about Claude Code marketplace plugins?
 
 Marketplace plugins (MTHDS, gstack, etc.) ship runtime code that has
