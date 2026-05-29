@@ -1,9 +1,16 @@
 # Claude Code Sandbox
 
-A Blaxel sandbox image that runs the **Claude Agent SDK** inside an
-isolated container and exposes it as an HTTP/SSE service on port `4100`.
-Drop it behind any chat UI or agent and you get an editor-aware Claude
-agent that streams its work back to the caller.
+A Blaxel sandbox image that runs **Claude Code** (the CLI/agent harness)
+inside an isolated container and exposes it as an HTTP/SSE service on
+port `4100`. Drop it behind any chat UI or agent and you get an
+editor-aware Claude agent that streams its work back to the caller.
+
+> **Claude Code vs Claude Agent SDK** — the image installs the
+> [`@anthropic-ai/claude-code`](https://www.npmjs.com/package/@anthropic-ai/claude-code)
+> CLI (the `claude` binary). Our `server/` wrapper depends on the
+> [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)
+> package and uses it to drive the CLI from Node. Two different packages,
+> both required; we mention both for clarity.
 
 Structured to slot directly into
 [`blaxel-ai/sandbox/hub/claude-code/`](https://github.com/blaxel-ai/sandbox/tree/main/hub).
@@ -23,9 +30,9 @@ Two processes run inside the container:
   filesystem and process APIs. We didn't write this; it's the standard
   binary every hub entry includes.
 - **`server/server.js`** (port `4100`, non-root `agent` user) — our
-  Node HTTP/SSE wrapper around the Claude Agent SDK. Exposes `/chat`,
-  `/respond`, `/health`. This is the layer that turns the low-level
-  `sandbox-api` into a high-level chat API.
+  Node HTTP/SSE wrapper that drives the Claude Code CLI via the Claude
+  Agent SDK. Exposes `/chat`, `/respond`, `/health`. This is the layer
+  that turns the low-level `sandbox-api` into a high-level chat API.
 
 This is the same shape as
 [`hub/jupyter-server/`](https://github.com/blaxel-ai/sandbox/tree/main/hub/jupyter-server),
