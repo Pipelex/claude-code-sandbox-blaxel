@@ -24,7 +24,7 @@ ENV WORKSPACE_DIR="/workspace"
 
 # `ANTHROPIC_MODEL` is intentionally NOT baked here. Provider/model selection
 # happens at runtime via `.env` (secrets) and `blaxel.toml`'s `[env]` block
-# (non-secret defaults). See docs/providers.md.
+# (non-secret defaults). See the "Provider auth" section in README.md.
 
 # Claude Code CLI (provides the `claude` binary the SDK shells out to).
 # Pinned to a known-good version for reproducible builds.

@@ -1,9 +1,16 @@
 # Claude Code Sandbox
 
-A Blaxel sandbox image that runs the **Claude Agent SDK** inside an
-isolated container and exposes it as an HTTP/SSE service on port `4100`.
-Drop it behind any chat UI or agent and you get an editor-aware Claude
-agent that streams its work back to the caller.
+A Blaxel sandbox image that runs **Claude Code** (the CLI/agent harness)
+inside an isolated container and exposes it as an HTTP/SSE service on
+port `4100`. Drop it behind any chat UI or agent and you get an
+editor-aware Claude agent that streams its work back to the caller.
+
+> **Claude Code vs Claude Agent SDK** — the image installs the
+> [`@anthropic-ai/claude-code`](https://www.npmjs.com/package/@anthropic-ai/claude-code)
+> CLI (the `claude` binary). Our `server/` wrapper depends on the
+> [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)
+> package and uses it to drive the CLI from Node. Two different packages,
+> both required; we mention both for clarity.
 
 Structured to slot directly into
 [`blaxel-ai/sandbox/hub/claude-code/`](https://github.com/blaxel-ai/sandbox/tree/main/hub).
@@ -23,9 +30,9 @@ Two processes run inside the container:
   filesystem and process APIs. We didn't write this; it's the standard
   binary every hub entry includes.
 - **`server/server.js`** (port `4100`, non-root `agent` user) — our
-  Node HTTP/SSE wrapper around the Claude Agent SDK. Exposes `/chat`,
-  `/respond`, `/health`. This is the layer that turns the low-level
-  `sandbox-api` into a high-level chat API.
+  Node HTTP/SSE wrapper that drives the Claude Code CLI via the Claude
+  Agent SDK. Exposes `/chat` and `/health`. This is the layer
+  that turns the low-level `sandbox-api` into a high-level chat API.
 
 This is the same shape as
 [`hub/jupyter-server/`](https://github.com/blaxel-ai/sandbox/tree/main/hub/jupyter-server),
@@ -116,6 +123,42 @@ curl -N -X POST http://localhost:4100/chat \
 You'll see a stream of SSE events including a workspace snapshot and a
 final `message` with `type: "result"`.
 
+## Deploy to Blaxel
+
+1. **Install the [Blaxel CLI](https://docs.blaxel.ai/Get-started)** and
+   log in:
+   ```sh
+   bl login YOUR-WORKSPACE
+   ```
+2. **Create `.env`** with your provider credentials:
+   ```sh
+   ANTHROPIC_API_KEY=sk-ant-...
+   ```
+   > ⚠️ **Do not commit `.env`** — it holds your API key. Confirm it's
+   > in `.gitignore` before you push.
+3. **Deploy**:
+   ```sh
+   bl deploy
+   ```
+4. **Create a private preview URL** for the agent port (`4100`) via the
+   [Blaxel Console](https://app.blaxel.ai) (Sandboxes → your sandbox →
+   *Previews*). The console also shows the equivalent SDK snippet for
+   minting previews programmatically.
+5. **Test it.** Include the preview token in the URL:
+   ```sh
+   curl -N -X POST https://<preview-id>.preview.bl.run/chat?bl_preview_token=<token> \
+     -H 'Content-Type: application/json' \
+     -d '{
+       "sessionId": "demo",
+       "content": "Create hello.txt with the word hi inside.",
+       "files": []
+     }'
+   ```
+
+For an end-to-end example that programmatically provisions a sandbox,
+mints a preview, and proxies a chatbot UI, see
+[`template-chatbot-claudecode`](https://github.com/pipelex/template-chatbot-claudecode).
+
 ## API surface (brief)
 
 - `POST /chat` — `{ sessionId?, content }` where `content` is a non-empty
@@ -187,6 +230,40 @@ ships a working demo of this pattern (look for `pushSampleSkill` in
 its `src/agent.ts`). Read its
 ["Extending Claude with Skills"](https://github.com/pipelex/template-chatbot-claudecode#-extending-claude-with-skills)
 section for a runnable example.
+
+### Installing a complete skills bundle
+
+If you'd rather install a full bundle (a published skill pack or
+marketplace plugin) instead of writing individual files, run one of
+these inside `/home/agent`:
+
+```sh
+# bundle from an npm-style "skills" package
+npx skills add <package>
+
+# Claude Code marketplace plugin
+claude plugin marketplace add <source> && claude plugin install <plugin-name>
+```
+
+Both work either interactively over `bl connect` (terminal into the
+running sandbox) or non-interactively from your host code via
+[`sandbox.process.exec`](https://docs.blaxel.ai/Sandboxes/Processes#execute-command).
+
+### Adding skills to a local Docker run
+
+When running the image with `docker run` (not on Blaxel), the
+`sandbox.fs.write` API isn't available. Mount a host directory over
+`/home/agent/.claude/skills/` instead:
+
+```sh
+docker run --rm -p 4100:4100 \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -v "$(pwd)/my-skills:/home/agent/.claude/skills" \
+  claude-code
+```
+
+Anything you drop under `./my-skills/<skill-name>/SKILL.md` on the host
+will be auto-discovered by the SDK on the next `/chat` request.
 
 ### What about Claude Code marketplace plugins?
 
