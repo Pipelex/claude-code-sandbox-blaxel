@@ -31,7 +31,7 @@ Two processes run inside the container:
   binary every hub entry includes.
 - **`server/server.js`** (port `4100`, non-root `agent` user) — our
   Node HTTP/SSE wrapper that drives the Claude Code CLI via the Claude
-  Agent SDK. Exposes `/chat`, `/respond`, `/health`. This is the layer
+  Agent SDK. Exposes `/chat` and `/health`. This is the layer
   that turns the low-level `sandbox-api` into a high-level chat API.
 
 This is the same shape as
@@ -242,7 +242,7 @@ these inside `/home/agent`:
 npx skills add <package>
 
 # Claude Code marketplace plugin
-claude plugin marketplace add <name> && claude plugin install <name>
+claude plugin marketplace add <source> && claude plugin install <plugin-name>
 ```
 
 Both work either interactively over `bl connect` (terminal into the
